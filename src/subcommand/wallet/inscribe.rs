@@ -18,15 +18,15 @@ use {
   std::collections::BTreeSet,
 };
 
-#[derive(Serialize)]
-struct Output {
-  commit: Txid,
-  inscription: InscriptionId,
-  reveal: Txid,
-  fees: u64,
+#[derive(Debug, Serialize)]
+pub struct Output {
+   pub(crate) commit: Txid,
+   pub(crate) inscription: InscriptionId,
+   pub(crate) reveal: Txid,
+   pub(crate) fees: u64,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Deserialize)]
 pub(crate) struct Inscribe {
   #[clap(long, help = "Inscribe <SATPOINT>")]
   pub(crate) satpoint: Option<SatPoint>,
@@ -50,6 +50,16 @@ pub(crate) struct Inscribe {
   pub(crate) dry_run: bool,
   #[clap(long, help = "Send inscription to <DESTINATION>.")]
   pub(crate) destination: Option<Address>,
+  #[clap(help = "Inscribe sat with contents of <Content>.")]
+  pub(crate) content: Option<String>,
+}
+
+impl Serialize for Inscribe {
+    fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer {
+        todo!()
+    }
 }
 
 impl Inscribe {
@@ -129,6 +139,77 @@ impl Inscribe {
     };
 
     Ok(())
+  }
+
+  pub(crate) fn run_api(
+    self,
+    options: &Options,
+    inscription: Inscription,
+    mut utxos: BTreeMap<OutPoint, Amount>,
+    inscriptions: BTreeMap<SatPoint, InscriptionId>,
+    client: &Client,
+  ) -> Result<Output> {
+    let commit_tx_change = [get_change_address(&client)?, get_change_address(&client)?];
+    let reveal_tx_destination = self
+      .destination
+      .map(Ok)
+      .unwrap_or_else(|| get_change_address(&client))?;
+
+    let (unsigned_commit_tx, reveal_tx, recovery_key_pair) =
+      Inscribe::create_inscription_transactions(
+        self.satpoint,
+        inscription,
+        inscriptions,
+        options.chain().network(),
+        utxos.clone(),
+        commit_tx_change,
+        reveal_tx_destination,
+        self.commit_fee_rate.unwrap_or(self.fee_rate),
+        self.fee_rate,
+        self.no_limit,
+      )?;
+
+    utxos.insert(
+      reveal_tx.input[0].previous_output,
+      Amount::from_sat(
+        unsigned_commit_tx.output[reveal_tx.input[0].previous_output.vout as usize].value,
+      ),
+    );
+
+    let fees =
+      Self::calculate_fee(&unsigned_commit_tx, &utxos) + Self::calculate_fee(&reveal_tx, &utxos);
+
+    if self.dry_run {
+      Ok(Output{
+        commit: unsigned_commit_tx.txid(),
+        reveal: reveal_tx.txid(),
+        inscription: reveal_tx.txid().into(),
+        fees,
+      })
+    } else {
+      if !self.no_backup {
+        Inscribe::backup_recovery_key(&client, recovery_key_pair, options.chain().network())?;
+      }
+
+      let signed_raw_commit_tx = client
+        .sign_raw_transaction_with_wallet(&unsigned_commit_tx, None, None)?
+        .hex;
+
+      let commit = client
+        .send_raw_transaction(&signed_raw_commit_tx)
+        .context("Failed to send commit transaction")?;
+
+      let reveal = client
+        .send_raw_transaction(&reveal_tx)
+        .context("Failed to send reveal transaction")?;
+
+      Ok(Output{
+        commit,
+        reveal,
+        inscription: reveal.into(),
+        fees,
+      })
+    }
   }
 
   fn calculate_fee(tx: &Transaction, utxos: &BTreeMap<OutPoint, Amount>) -> u64 {

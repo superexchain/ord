@@ -4,6 +4,7 @@ pub(super) enum ServerError {
   Internal(Error),
   BadRequest(String),
   NotFound(String),
+  Unauthorized(String),
 }
 
 pub(super) type ServerResult<T> = Result<T, ServerError>;
@@ -21,6 +22,7 @@ impl IntoResponse for ServerError {
         )
           .into_response()
       }
+      Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message).into_response(),
       Self::NotFound(message) => (StatusCode::NOT_FOUND, message).into_response(),
       Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
     }

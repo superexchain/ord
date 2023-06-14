@@ -78,10 +78,14 @@ fn get_change_address(client: &Client) -> Result<Address> {
 }
 
 pub(crate) fn initialize_wallet(options: &Options, seed: [u8; 64]) -> Result {
-  let client = options.bitcoin_rpc_client_for_wallet_command(true)?;
+  return initialize_wallet_and_rpc_url(options, seed, &options.wallet);
+}
+
+pub(crate) fn initialize_wallet_and_rpc_url(options: &Options, seed: [u8; 64], wallet: &String) -> Result {
+  let client = options.bitcoin_rpc_client_for_wallet_command_and_rpc_name(true, wallet)?;
   let network = options.chain().network();
 
-  client.create_wallet(&options.wallet, None, Some(true), None, None)?;
+  client.create_wallet(wallet, None, Some(true), None, None)?;
 
   let secp = Secp256k1::new();
 

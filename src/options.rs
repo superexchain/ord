@@ -224,6 +224,10 @@ impl Options {
   }
 
   pub(crate) fn bitcoin_rpc_client_for_wallet_command(&self, create: bool) -> Result<Client> {
+    return self.bitcoin_rpc_client_for_wallet_command_and_rpc_name(create, &self.wallet);
+  }
+
+  pub(crate) fn bitcoin_rpc_client_for_wallet_command_and_rpc_name(&self, create: bool, wallet: &String) -> Result<Client> {
     let client = self.bitcoin_rpc_client()?;
 
     const MIN_VERSION: usize = 240000;
@@ -238,8 +242,8 @@ impl Options {
     }
 
     if !create {
-      if !client.list_wallets()?.contains(&self.wallet) {
-        client.load_wallet(&self.wallet)?;
+      if !client.list_wallets()?.contains(&wallet) {
+        client.load_wallet(&wallet)?;
       }
 
       let descriptors = client.list_descriptors(None)?.descriptors;

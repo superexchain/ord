@@ -80,6 +80,20 @@ impl Inscription {
     })
   }
 
+  pub(crate) fn from_content(chain: Chain, content_type: &str, body: &str) -> Result<Self, Error> {
+    if let Some(limit) = chain.inscription_content_size_limit() {
+      let len = body.len();
+      if len > limit {
+        bail!("content size of {len} bytes exceeds {limit} byte limit for {chain} inscriptions");
+      }
+    }
+
+    Ok(Self {
+      body: Some(body.into()),
+      content_type: Some(content_type.into()),
+    })
+  }
+
   fn append_reveal_script_to_builder(&self, mut builder: script::Builder) -> script::Builder {
     builder = builder
       .push_opcode(opcodes::OP_FALSE)

@@ -234,10 +234,13 @@ impl Index {
   }
 
   pub(crate) fn get_unspent_outputs(&self, _wallet: Wallet) -> Result<BTreeMap<OutPoint, Amount>> {
+    return self.get_unspent_outputs_by_client(&self.client);
+  }
+
+  pub(crate) fn get_unspent_outputs_by_client(&self, client: &Client) -> Result<BTreeMap<OutPoint, Amount>> {
     let mut utxos = BTreeMap::new();
     utxos.extend(
-      self
-        .client
+      client
         .list_unspent(None, None, None, None, None)?
         .into_iter()
         .map(|utxo| {

@@ -1,12 +1,14 @@
+use http::HeaderMap;
+
 use super::*;
 
 #[derive(Serialize)]
-struct Output {
-  mnemonic: Mnemonic,
-  passphrase: Option<String>,
+pub(crate) struct Output {
+  pub mnemonic: Mnemonic,
+  pub passphrase: Option<String>,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Deserialize)]
 pub(crate) struct Create {
   #[clap(
     long,
@@ -31,5 +33,21 @@ impl Create {
     })?;
 
     Ok(())
+  }
+
+  pub(crate) fn run_api(self, options: &Options, header: &HeaderMap) -> Result<Output> {
+    let mut entropy = [0; 16];
+    rand::thread_rng().fill_bytes(&mut entropy);
+
+    let mnemonic = Mnemonic::from_entropy(&entropy)?;
+
+    let wallet = &String::from(header.get("wallet").unwrap().to_str().unwrap());
+
+    initialize_wallet_and_rpc_url(&options, mnemonic.to_seed(self.passphrase.clone()), wallet)?;
+
+    Ok(Output {
+      mnemonic,
+      passphrase: Some(self.passphrase),
+    })
   }
 }

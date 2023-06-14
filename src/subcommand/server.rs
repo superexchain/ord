@@ -1,10 +1,16 @@
+use std::collections::BTreeSet;
+
+use axum::{routing::post, Json};
+
 use {
   self::{
+    accept_json::AcceptJson,
     deserialize_from_str::DeserializeFromStr,
     error::{OptionExt, ServerError, ServerResult},
   },
   super::*,
   crate::page_config::PageConfig,
+  crate::subcommand::wallet::{inscribe, send, create, receive, transactions::Output},
   crate::templates::{
     BlockHtml, ClockSvg, HomeHtml, InputHtml, InscriptionHtml, InscriptionsHtml, OutputHtml,
     PageContent, PageHtml, PreviewAudioHtml, PreviewImageHtml, PreviewPdfHtml, PreviewTextHtml,
@@ -36,6 +42,7 @@ use {
   },
 };
 
+mod accept_json;
 mod error;
 
 enum BlockQuery {
@@ -168,6 +175,15 @@ impl Server {
         .route("/static/*path", get(Self::static_asset))
         .route("/status", get(Self::status))
         .route("/tx/:txid", get(Self::transaction))
+
+        .route("/wallet/balance", get(Self::balance))
+        .route("/wallet/receive", get(Self::receive))
+        .route("/wallet/transactions", get(Self::transactions))
+        .route("/wallet/inscribe", post(Self::inscribe))
+        .route("/wallet/inscribe_content", post(Self::inscribe_content))
+        .route("/wallet/send", post(Self::send))
+        .route("/wallet/create", post(Self::create))
+        
         .layer(Extension(index))
         .layer(Extension(page_config))
         .layer(Extension(Arc::new(config)))
@@ -623,7 +639,7 @@ impl Server {
 
     let chain = page_config.chain;
     match chain {
-      Chain::Mainnet => builder.title("Inscriptions"),
+      Chain::Mainnet => builder.title("Inscriptions".to_owned()),
       _ => builder.title(format!("Inscriptions – {chain:?}")),
     };
 
@@ -632,8 +648,8 @@ impl Server {
     for (number, id) in index.get_feed_inscriptions(300)? {
       builder.item(
         rss::ItemBuilder::default()
-          .title(format!("Inscription {number}"))
-          .link(format!("/inscription/{id}"))
+          .title(Some(format!("Inscription {number}")))
+          .link(Some(format!("/inscription/{id}")))
           .guid(Some(rss::Guid {
             value: format!("/inscription/{id}"),
             permalink: true,
@@ -898,6 +914,315 @@ impl Server {
         prev,
       }
       .page(page_config, index.has_sat_index()?),
+    )
+  }
+
+  async fn balance(
+    Extension(index): Extension<Arc<Index>>,
+    Extension(config): Extension<Arc<Config>>,
+    Extension(options): Extension<Arc<Options>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let inscription_outputs = index
+      .get_inscriptions(None)?
+      .keys()
+      .map(|satpoint| satpoint.outpoint)
+      .collect::<BTreeSet<OutPoint>>();
+    let wallet = String::from(header.get("wallet").unwrap().to_str().unwrap());
+    let client = options.bitcoin_rpc_client_for_wallet_command_and_rpc_name(false, &wallet);
+    let mut balance = 0;
+    for (outpoint, amount) in index.get_unspent_outputs_by_client(&client?)? {
+      if !inscription_outputs.contains(&outpoint) {
+        balance += amount.to_sat()
+      }
+    }
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "cardinal": balance,
+        "_links": {
+          "self": {
+            "href": format!("/wallet/balance"),
+          },
+        }
+      }))
+      .into_response(),
+    )
+  }
+
+  async fn receive(
+    Extension(config): Extension<Arc<Config>>,
+    Extension(options): Extension<Arc<Options>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let output = receive::run_api(&options, &header)?;
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "address": output.address.to_string(),
+        "_links": {
+          "self": {
+            "href": format!("/wallet/receive"),
+          },
+        }
+      }))
+      .into_response(),
+    )
+  }
+
+  async fn transactions(
+    Extension(config): Extension<Arc<Config>>,
+    Extension(client): Extension<Arc<Client>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let mut outputs = Vec::new();
+    let transactions = client.list_transactions(None, Some(u16::MAX.into()), None, None);
+    if transactions.is_err() {
+      return Err(ServerError::Internal(Error::from(
+        transactions.err().unwrap(),
+      )));
+    }
+    for tx in transactions.unwrap() {
+      outputs.push(Output {
+        transaction: tx.info.txid,
+        confirmations: tx.info.confirmations,
+      });
+    }
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "count": outputs.len(),
+        "transactions": outputs.iter().map(|output| {
+          serde_json::json!({
+            "transaction": output.transaction,
+            "confirmations": output.confirmations,
+            "_links": {
+              "transaction": {
+                "href": format!("/tx/{}", output.transaction),
+              },
+            },
+          })
+        }).collect::<Vec<_>>(),
+        "_links": {
+          "self": {
+            "href": format!("/wallet/transactions"),
+          },
+        }
+      }))
+      .into_response(),
+    )
+  }
+
+  async fn inscribe(
+    Extension(index): Extension<Arc<Index>>,
+    Extension(config): Extension<Arc<Config>>,
+    Extension(options): Extension<Arc<Options>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+    Json(inscribe): Json<inscribe::Inscribe>,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let wallet = &String::from(header.get("wallet").unwrap().to_str().unwrap());
+    let client = options.bitcoin_rpc_client_for_wallet_command_and_rpc_name(false, wallet)?;
+    let inscription = Inscription::from_file(options.chain(), &inscribe.file)?;
+    let utxos = index.get_unspent_outputs_by_client(&client)?;
+    let inscriptions = index.get_inscriptions(None)?;
+
+    let output = inscribe.run_api(&options, inscription, utxos, inscriptions, &client)?;
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "commit_tx": output.commit,
+        "reveal_tx": output.reveal,
+        "inscription_id": output.inscription,
+        "fees": output.fees,
+        "_links": {
+          "self": {
+            "href": format!("/wallet/inscribe"),
+          },
+        }
+      }))
+      .into_response(),
+    )
+  }
+
+  async fn inscribe_content(
+    Extension(index): Extension<Arc<Index>>,
+    Extension(config): Extension<Arc<Config>>,
+    Extension(options): Extension<Arc<Options>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+    Json(inscribe): Json<inscribe::Inscribe>,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let content_type = "text/plain;charset=utf-8";
+    let content = inscribe.content.as_ref().unwrap();
+
+    let wallet = &String::from(header.get("wallet").unwrap().to_str().unwrap());
+    let client = options.bitcoin_rpc_client_for_wallet_command_and_rpc_name(false, wallet)?;
+    let inscription = Inscription::from_content(options.chain(), content_type, &content.as_str())?;
+    let utxos = index.get_unspent_outputs_by_client(&client)?;
+    let inscriptions = index.get_inscriptions(None)?;
+
+    let output = inscribe.run_api(&options, inscription, utxos, inscriptions, &client)?;
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "commit_tx": output.commit,
+        "reveal_tx": output.reveal,
+        "inscription_id": output.inscription,
+        "fees": output.fees,
+        "_links": {
+          "self": {
+            "href": format!("/wallet/inscribe_content"),
+          },
+        }
+      }))
+      .into_response(),
+    )
+  }
+
+  async fn send(
+    Extension(index): Extension<Arc<Index>>,
+    Extension(config): Extension<Arc<Config>>,
+    Extension(options): Extension<Arc<Options>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+    Json(send): Json<send::Send>,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let txid = send.run_api(&options, &index, header)?;
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "txid": txid,
+        "_links": {
+          "self": {
+            "href": format!("/wallet/send"),
+          },
+        }
+      }))
+      .into_response(),
+    )
+  }
+
+  async fn create(
+    Extension(config): Extension<Arc<Config>>,
+    Extension(options): Extension<Arc<Options>>,
+    accept_json: AcceptJson,
+    header: HeaderMap,
+    Json(create): Json<create::Create>,
+  ) -> ServerResult<Response> {
+    if config.api_key.is_none()
+      || !header.contains_key("x-api-key")
+      || config.api_key.as_ref().unwrap().as_str() != header.get("x-api-key").unwrap()
+    {
+      return Err(ServerError::Unauthorized(
+        "Authentication failure".to_string(),
+      ));
+    }
+    if !accept_json.0 {
+      return Err(ServerError::BadRequest(
+        "Only application/json is allowed".to_string(),
+      ));
+    }
+
+    let output = create.run_api(&options, &header)?;
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "output": output,
+        "_links": {
+          "self": {
+            "href": format!("/wallet/create"),
+          },
+        }
+      }))
+      .into_response(),
     )
   }
 
