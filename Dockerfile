@@ -13,5 +13,5 @@ WORKDIR /app
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/ord /app
 
 # docker run --rm -it -e RUST_LOG=info -v /data/repo/ord-regtest/data:/app/data ord:v0.6.1-api sh
-# docker run --rm -p 8001:80 -e RUST_LOG=info -v /data/repo/ord-regtest/data:/app/data -v /data/repo/bitcoin-test:/app/bitcoin-test ord:v0.6.1-api sh -c ""
-# docker run --rm -p 8001:80 -e RUST_LOG=info -v /data/repo/ord-regtest/data:/app/data ord:v0.6.1-api sh -c "ord -r --config=data/ord.yaml --data-dir=data server"
+# docker run --rm -p 8002:80 -e RUST_LOG=info -v /data/repo/ord-regtest/data:/app/data -v /data/repo/bitcoin-test:/app/bitcoin-test ord:v0.6.1-api sh -c ""
+# docker run --rm -p 8002:80 -e RUST_LOG=info -v /data/repo/ord-regtest/data:/app/data ord:v0.6.1-api sh -c "ord -r --config=data/ord.yaml --data-dir=data --rpc-url=192.168.10.233:18443 server"

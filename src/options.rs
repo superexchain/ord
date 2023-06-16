@@ -77,11 +77,15 @@ impl Options {
   }
 
   pub(crate) fn rpc_url(&self) -> String {
+    return self.rpc_url_with_walelt(&self.wallet);
+  }
+
+  pub(crate) fn rpc_url_with_walelt(&self, wallet: &String) -> String {
     self.rpc_url.clone().unwrap_or_else(|| {
       format!(
         "127.0.0.1:{}/wallet/{}",
         self.chain().default_rpc_port(),
-        self.wallet
+        wallet
       )
     })
   }
@@ -190,7 +194,11 @@ impl Options {
   }
 
   pub(crate) fn bitcoin_rpc_client(&self) -> Result<Client> {
-    let rpc_url = self.rpc_url();
+    return self.bitcoin_rpc_client_wallet(&self.wallet)
+  }
+
+  pub(crate) fn bitcoin_rpc_client_wallet(&self, wallet: &String) -> Result<Client> {
+    let rpc_url = self.rpc_url_with_walelt(wallet);
 
     let auth = self.auth()?;
 
@@ -228,7 +236,7 @@ impl Options {
   }
 
   pub(crate) fn bitcoin_rpc_client_for_wallet_command_and_rpc_name(&self, create: bool, wallet: &String) -> Result<Client> {
-    let client = self.bitcoin_rpc_client()?;
+    let client = self.bitcoin_rpc_client_wallet(wallet)?;
 
     const MIN_VERSION: usize = 240000;
 
@@ -241,8 +249,8 @@ impl Options {
       );
     }
 
-    if !create {
-      if !client.list_wallets()?.contains(&wallet) {
+    if wallet != "ord" && !create {
+      if!client.list_wallets()?.contains(&wallet) {
         client.load_wallet(&wallet)?;
       }
 

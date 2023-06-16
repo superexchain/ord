@@ -141,6 +141,7 @@ impl Server {
         thread::sleep(Duration::from_millis(5000));
       });
 
+      let wallet_client = options.bitcoin_rpc_client_for_wallet_command(false)?;
       let config = options.load_config()?;
       let acme_domains = self.acme_domains()?;
 
@@ -187,6 +188,8 @@ impl Server {
         .layer(Extension(index))
         .layer(Extension(page_config))
         .layer(Extension(Arc::new(config)))
+        .layer(Extension(Arc::new(options.clone())))
+        .layer(Extension(Arc::new(wallet_client)))
         .layer(SetResponseHeaderLayer::if_not_present(
           header::CONTENT_SECURITY_POLICY,
           HeaderValue::from_static("default-src 'self'"),
