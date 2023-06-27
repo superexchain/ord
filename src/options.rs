@@ -81,13 +81,22 @@ impl Options {
   }
 
   pub(crate) fn rpc_url_with_walelt(&self, wallet: &String) -> String {
-    self.rpc_url.clone().unwrap_or_else(|| {
-      format!(
+    // self.rpc_url.clone().unwrap_or_else(|| {
+    //   format!(
+    //     "127.0.0.1:{}/wallet/{}",
+    //     self.chain().default_rpc_port(),
+    //     wallet
+    //   )
+    // })
+    let rpc_url = match self.rpc_url.clone() {
+      Some(url) => url,
+      None => format!(
         "127.0.0.1:{}/wallet/{}",
-        self.chain().default_rpc_port(),
+        self.chain().default_rpc_port().to_string(),
         wallet
-      )
-    })
+      ),
+    };
+    format!("{}/wallet/{}", rpc_url, wallet)
   }
 
   pub(crate) fn cookie_file(&self) -> Result<PathBuf> {
@@ -194,7 +203,7 @@ impl Options {
   }
 
   pub(crate) fn bitcoin_rpc_client(&self) -> Result<Client> {
-    return self.bitcoin_rpc_client_wallet(&self.wallet)
+    return self.bitcoin_rpc_client_wallet(&self.wallet);
   }
 
   pub(crate) fn bitcoin_rpc_client_wallet(&self, wallet: &String) -> Result<Client> {
@@ -202,7 +211,7 @@ impl Options {
 
     let auth = self.auth()?;
 
-    // log::info!("Connecting to Bitcoin Core at {}", self.rpc_url());
+    // log::info!("Connecting to Bitcoin Core at {}", rpc_url);
 
     if let Auth::CookieFile(cookie_file) = &auth {
       log::info!(
@@ -235,7 +244,11 @@ impl Options {
     return self.bitcoin_rpc_client_for_wallet_command_and_rpc_name(create, &self.wallet);
   }
 
-  pub(crate) fn bitcoin_rpc_client_for_wallet_command_and_rpc_name(&self, create: bool, wallet: &String) -> Result<Client> {
+  pub(crate) fn bitcoin_rpc_client_for_wallet_command_and_rpc_name(
+    &self,
+    create: bool,
+    wallet: &String,
+  ) -> Result<Client> {
     let client = self.bitcoin_rpc_client_wallet(wallet)?;
 
     const MIN_VERSION: usize = 240000;
@@ -250,7 +263,7 @@ impl Options {
     }
 
     if wallet != "ord" && !create {
-      if!client.list_wallets()?.contains(&wallet) {
+      if !client.list_wallets()?.contains(&wallet) {
         client.load_wallet(&wallet)?;
       }
 
@@ -267,7 +280,7 @@ impl Options {
         .count();
 
       if tr != 2 || descriptors.len() != 2 + rawtr {
-        bail!("wallet \"{}\" contains unexpected output descriptors, and does not appear to be an `ord` wallet, create a new wallet with `ord wallet create`", self.wallet);
+        bail!("wallet \"{}\" contains unexpected output descriptors, and does not appear to be an `ord` wallet, create a new wallet with `ord wallet create`", wallet);
       }
     }
 
